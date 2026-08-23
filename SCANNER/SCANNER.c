@@ -23,6 +23,7 @@ static const float line_weight[LINE_SENSOR_NUM] =
 /**
  * @brief 初始化循迹传感器
  */
+/*初始化循迹传感器，清零所有状态变量*/
 void LineSensor_Init(void)
 {
     line_sensor.raw      = 0;
@@ -35,6 +36,7 @@ void LineSensor_Init(void)
 /**
  * @brief 读取16路循迹GPIO
  */
+/*读取16路循迹传感器的GPIO状态，返回16位原始数据*/
 uint16_t LineSensor_Read(void)
 {
     uint16_t data = 0;
@@ -63,6 +65,7 @@ uint16_t LineSensor_Read(void)
 /**
  * @brief 根据16路灯状态计算循迹误差
  */
+/*根据16路灯状态计算循迹误差，支持忽略边缘灯*/
 float LineSensor_CalcError(
     uint16_t raw,
     uint8_t edge_ignore
@@ -117,6 +120,7 @@ float LineSensor_CalcError(
 /**
  * @brief 一次完成循迹灯读取和误差计算
  */
+/*一次完成循迹灯读取和误差计算，更新传感器状态并返回误差值*/
 float LineSensor_Update(uint8_t edge_ignore)
 {
     uint16_t raw;

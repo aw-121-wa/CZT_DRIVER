@@ -19,6 +19,7 @@
  * checksum =
  * LEN ^ CMD ^ PARAM1 ^ PARAM2 ...
  */
+/*计算BY8001协议数据的XOR校验和*/
 static uint8_t BY8001_Checksum(
     uint8_t length,
     const uint8_t *data
@@ -44,6 +45,7 @@ static uint8_t BY8001_Checksum(
 /*
  * UART发送
  */
+/*通过UART发送数据到BY8001模块*/
 static HAL_StatusTypeDef BY8001_Send(
     BY8001_Handle_t *dev,
     uint8_t *data,
@@ -66,6 +68,7 @@ static HAL_StatusTypeDef BY8001_Send(
 }
 
 
+/*初始化BY8001模块，配置UART和超时时间*/
 void BY8001_Init(
     BY8001_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -84,6 +87,7 @@ void BY8001_Init(
  *
  * 7E 05 41 XX XX CHECK EF
  */
+/*播放指定编号的音频曲目*/
 HAL_StatusTypeDef BY8001_Play(
     BY8001_Handle_t *dev,
     uint16_t index
@@ -142,6 +146,7 @@ HAL_StatusTypeDef BY8001_Play(
  *
  * 7E 03 06 VOL CHECK EF
  */
+/*设置BY8001模块的音量级别*/
 HAL_StatusTypeDef BY8001_SetVolume(
     BY8001_Handle_t *dev,
     uint8_t volume

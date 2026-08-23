@@ -2,11 +2,13 @@
 
 #include <string.h>
 
+/*重置工作缓冲区，清零工作长度*/
 static void qr_scanner_reset_work(QRScanner_Handle_t *dev)
 {
     dev->work_len = 0U;
 }
 
+/*发布扫描到的二维码数据到输出缓冲区*/
 static void qr_scanner_publish(QRScanner_Handle_t *dev)
 {
     if (dev->work_len == 0U)
@@ -34,6 +36,7 @@ static void qr_scanner_publish(QRScanner_Handle_t *dev)
     qr_scanner_reset_work(dev);
 }
 
+/*将接收到的字节推送到工作缓冲区，处理帧分隔符*/
 static void qr_scanner_push_byte(
     QRScanner_Handle_t *dev,
     uint8_t byte
@@ -76,6 +79,7 @@ static void qr_scanner_push_byte(
     }
 }
 
+/*初始化二维码扫描器，配置UART并启动DMA接收*/
 HAL_StatusTypeDef QRScanner_Init(
     QRScanner_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -95,6 +99,7 @@ HAL_StatusTypeDef QRScanner_Init(
     return QRScanner_StartReceive(dev);
 }
 
+/*启动DMA接收，开始接收二维码扫描器数据*/
 HAL_StatusTypeDef QRScanner_StartReceive(
     QRScanner_Handle_t *dev
 )
@@ -124,6 +129,7 @@ HAL_StatusTypeDef QRScanner_StartReceive(
     return status;
 }
 
+/*设置帧模式，支持CRLF分隔、固定长度和空闲检测三种模式*/
 HAL_StatusTypeDef QRScanner_SetFrameMode(
     QRScanner_Handle_t *dev,
     QRScanner_FrameMode_t mode,
@@ -156,6 +162,7 @@ HAL_StatusTypeDef QRScanner_SetFrameMode(
     return HAL_OK;
 }
 
+/*处理接收到的字节数据，逐字节解析二维码数据*/
 void QRScanner_ProcessBytes(
     QRScanner_Handle_t *dev,
     const uint8_t *data,
@@ -171,6 +178,7 @@ void QRScanner_ProcessBytes(
     }
 }
 
+/*UART接收空闲回调函数，处理接收到的数据并重新启动DMA接收*/
 void QRScanner_RxEventCallback(
     QRScanner_Handle_t *dev,
     UART_HandleTypeDef *huart,
@@ -201,6 +209,7 @@ void QRScanner_RxEventCallback(
     (void)QRScanner_StartReceive(dev);
 }
 
+/*UART错误回调函数，中止接收并重新启动DMA接收*/
 void QRScanner_ErrorCallback(
     QRScanner_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -220,6 +229,7 @@ void QRScanner_ErrorCallback(
     (void)QRScanner_StartReceive(dev);
 }
 
+/*检查是否有新的二维码数据可用*/
 uint8_t QRScanner_Available(
     const QRScanner_Handle_t *dev
 )
@@ -230,6 +240,7 @@ uint8_t QRScanner_Available(
     return dev->available;
 }
 
+/*读取二维码数据到输出缓冲区，清除可用标志*/
 uint16_t QRScanner_Read(
     QRScanner_Handle_t *dev,
     char *out,
@@ -258,6 +269,7 @@ uint16_t QRScanner_Read(
     return len;
 }
 
+/*清除二维码数据和可用标志*/
 void QRScanner_Clear(
     QRScanner_Handle_t *dev
 )
@@ -269,11 +281,13 @@ void QRScanner_Clear(
     dev->data_len = 0U;
 }
 
+/*判断字符是否为数字*/
 static uint8_t qr_is_digit(char c)
 {
     return (c >= '0' && c <= '9') ? 1U : 0U;
 }
 
+/*解析二维码中的双3位数字格式数据*/
 uint8_t QRScanner_ParseDual3Digit(
     const char *text,
     uint16_t *first,

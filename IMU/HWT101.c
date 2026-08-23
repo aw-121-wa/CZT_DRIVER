@@ -175,6 +175,7 @@ static void HWT101_SearchNextHeader(HWT101_Handle_t *dev)
  * 自动搜帧
  * ========================================================= */
 
+/*处理接收到的字节数据，自动搜帧并解析HWT101数据帧*/
 void HWT101_ProcessBytes(
     HWT101_Handle_t *dev,
     const uint8_t *data,
@@ -287,6 +288,7 @@ void HWT101_ProcessBytes(
  * DMA 接收
  * ========================================================= */
 
+/*启动DMA接收，开始接收HWT101数据*/
 HAL_StatusTypeDef HWT101_StartReceive(
     HWT101_Handle_t *dev
 )
@@ -326,6 +328,7 @@ HAL_StatusTypeDef HWT101_StartReceive(
  * 初始化
  * ========================================================= */
 
+/*初始化HWT101设备，配置UART并启动DMA接收*/
 HAL_StatusTypeDef HWT101_Init(
     HWT101_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -348,6 +351,7 @@ HAL_StatusTypeDef HWT101_Init(
  * UART ReceiveToIdle 回调
  * ========================================================= */
 
+/*UART接收空闲回调函数，处理接收到的数据并重新启动DMA接收*/
 void HWT101_RxEventCallback(
     HWT101_Handle_t *dev,
     UART_HandleTypeDef *huart,
@@ -388,6 +392,7 @@ void HWT101_RxEventCallback(
  * UART 错误恢复
  * ========================================================= */
 
+/*UART错误回调函数，中止接收并重新启动DMA接收*/
 void HWT101_ErrorCallback(
     HWT101_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -491,6 +496,7 @@ static uint32_t HWT101_GetBaudValue(
  * 修改 HWT101 波特率
  * ========================================================= */
 
+/*设置HWT101设备的波特率，包括解锁寄存器、修改波特率、保存配置等步骤*/
 HAL_StatusTypeDef HWT101_SetBaudrate(
     HWT101_Handle_t *dev,
     HWT101_Baud_t baud

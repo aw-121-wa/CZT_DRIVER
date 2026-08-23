@@ -18,6 +18,7 @@
 
 /* ===================== 内部工具函数 ===================== */
 
+/*读取小端格式的16位无符号整数*/
 static uint16_t lsc16_read_u16_le(const uint8_t *p)
 {
     return (uint16_t)p[0] |
@@ -25,6 +26,7 @@ static uint16_t lsc16_read_u16_le(const uint8_t *p)
 }
 
 
+/*通过UART发送数据到LSC-16控制器*/
 static HAL_StatusTypeDef lsc16_send(
     LSC16_Handle_t *dev,
     const uint8_t *data,
@@ -58,6 +60,7 @@ static HAL_StatusTypeDef lsc16_send(
  * 所以：
  * 总帧字节数 = Length + 2个帧头
  */
+/*解析LSC-16协议帧，处理动作组状态和电池电压等响应*/
 static void lsc16_parse_frame(
     LSC16_Handle_t *dev,
     const uint8_t *frame,
@@ -149,6 +152,7 @@ static void lsc16_parse_frame(
 
 /* ===================== 自动搜帧 ===================== */
 
+/*处理接收到的字节数据，自动搜帧并解析LSC-16协议*/
 void LSC16_ProcessRxBytes(
     LSC16_Handle_t *dev,
     const uint8_t *data,
@@ -263,6 +267,7 @@ void LSC16_ProcessRxBytes(
 
 /* ===================== DMA 接收 ===================== */
 
+/*启动DMA接收，开始接收LSC-16控制器数据*/
 HAL_StatusTypeDef LSC16_StartReceiveDMA(
     LSC16_Handle_t *dev
 )
@@ -297,6 +302,7 @@ HAL_StatusTypeDef LSC16_StartReceiveDMA(
 }
 
 
+/*UART接收空闲回调函数，处理接收到的数据并重新启动DMA接收*/
 void LSC16_RxEventCallback(
     LSC16_Handle_t *dev,
     UART_HandleTypeDef *huart,
@@ -326,6 +332,7 @@ void LSC16_RxEventCallback(
 }
 
 
+/*UART错误回调函数，中止接收并重新启动DMA接收*/
 void LSC16_ErrorCallback(
     LSC16_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -349,6 +356,7 @@ void LSC16_ErrorCallback(
 
 /* ===================== 初始化 ===================== */
 
+/*初始化LSC-16设备，配置UART并启动DMA接收*/
 HAL_StatusTypeDef LSC16_Init(
     LSC16_Handle_t *dev,
     UART_HandleTypeDef *huart
@@ -381,6 +389,7 @@ HAL_StatusTypeDef LSC16_Init(
 
 /* ===================== PWM 舵机控制 ===================== */
 
+/*控制多个PWM舵机移动到指定位置*/
 HAL_StatusTypeDef LSC16_MoveServos(
     LSC16_Handle_t *dev,
     const LSC16_Servo_t *servos,
@@ -470,6 +479,7 @@ HAL_StatusTypeDef LSC16_MoveServos(
 }
 
 
+/*控制单个PWM舵机移动到指定位置*/
 HAL_StatusTypeDef LSC16_MoveServo(
     LSC16_Handle_t *dev,
     uint8_t id,
@@ -493,6 +503,7 @@ HAL_StatusTypeDef LSC16_MoveServo(
 
 /* ===================== 动作组 ===================== */
 
+/*运行指定动作组，可设置执行次数*/
 HAL_StatusTypeDef LSC16_RunActionGroup(
     LSC16_Handle_t *dev,
     uint8_t group,
@@ -529,6 +540,7 @@ HAL_StatusTypeDef LSC16_RunActionGroup(
 }
 
 
+/*停止当前正在执行的动作组*/
 HAL_StatusTypeDef LSC16_StopActionGroup(
     LSC16_Handle_t *dev
 )
@@ -549,6 +561,7 @@ HAL_StatusTypeDef LSC16_StopActionGroup(
 }
 
 
+/*设置指定动作组的执行速度百分比*/
 HAL_StatusTypeDef LSC16_SetActionGroupSpeed(
     LSC16_Handle_t *dev,
     uint8_t group,
@@ -580,6 +593,7 @@ HAL_StatusTypeDef LSC16_SetActionGroupSpeed(
 
 /* ===================== 电池电压 ===================== */
 
+/*请求LSC-16控制器返回电池电压*/
 HAL_StatusTypeDef LSC16_RequestBatteryVoltage(
     LSC16_Handle_t *dev
 )
