@@ -1,11 +1,19 @@
 GPT辅助开发的驱动库
 
-目前实现
--HWT101协议陀螺仪
--最大16路IO口循迹板
--幻尔16路舵机控制板
--BY-8001语音模块
--QR-SCANNER扫码模块
--MPU6050
--TB6612
--直接驱动编码器电机
+Motor
+- TB6612
+- Dual PWM DC Motor
+- STM32 Encoder
+
+Sensor
+- HWT101
+- MPU6050
+- 16-channel Line Sensor
+
+Module
+- LSC16
+- BY8001
+- QR Scanner
+
+Vision
+- MaixCam

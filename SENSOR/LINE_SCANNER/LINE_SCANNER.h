@@ -1,5 +1,5 @@
-#ifndef LINE_SENSOR_H
-#define LINE_SENSOR_H
+#ifndef LINE_SCANNER_H
+#define LINE_SCANNER_H
 
 #include "main.h"
 #include <stdint.h>

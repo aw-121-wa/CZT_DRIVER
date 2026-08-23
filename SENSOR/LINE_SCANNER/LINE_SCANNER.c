@@ -1,4 +1,4 @@
-#include "SCANNER.h"
+#include "LINE_SCANNER.h"
 
 LineSensor_t line_sensor;
 
