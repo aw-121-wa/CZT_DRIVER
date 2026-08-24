@@ -1,0 +1,8 @@
+id: licang
+name: licang
+version: 1.0.1
+author: 陈智涛
+icon: ''
+desc: 26立仓
+files:
+  - licang_BLUE_RED_BALL.py
