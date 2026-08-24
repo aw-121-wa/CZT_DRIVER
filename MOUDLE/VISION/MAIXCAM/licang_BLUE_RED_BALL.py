@@ -12,11 +12,11 @@ parameters and should be tuned with the B25 illumination LED enabled.
 import json
 
 try:
-    from maix import camera, display, gpio, image, pinmap, time, touchscreen
+    from maix import app, camera, display, gpio, image, pinmap, time, touchscreen
     from maix.peripheral import uart
     MAIXPY = True
 except Exception:
-    camera = display = gpio = image = pinmap = time = touchscreen = uart = None
+    app = camera = display = gpio = image = pinmap = time = touchscreen = uart = None
     MAIXPY = False
 
 
@@ -48,8 +48,10 @@ ROI = DEFAULT_ROI[:]
 TRIGGER_ZONE = DEFAULT_TRIGGER_ZONE[:]
 
 CALIB_SEARCH_ROI = [0, 0, CAMERA_WIDTH, 380]
+# Calibration search center only; the final ROI uses the measured ball center.
 GRAB_CENTER_X = CAMERA_WIDTH // 2
 GRAB_CENTER_Y = 220
+CALIBRATED_CENTER_X = GRAB_CENTER_X
 BALL_WIDTH = 50
 BALL_HEIGHT = 50
 CALIB_X_TOLERANCE = 40
@@ -102,7 +104,6 @@ illumination_gpio = None
 calibrating = False
 calibration_started_ms = 0
 calibration_samples = []
-calibration_inside_target = False
 calibration_old_roi = None
 calibration_old_trigger_zone = None
 last_status_message = ""
@@ -212,18 +213,18 @@ def median_int(values):
     return int((ordered[middle - 1] + ordered[middle]) / 2)
 
 
-def build_calibrated_regions(center_y, ball_width, ball_height):
-    """Build a larger search ROI and smaller trigger zone around grab center."""
+def build_calibrated_regions(center_x, center_y, ball_width, ball_height):
+    """Build regions centered on the measured ball position."""
     roi_width = max(ROI_MIN_WIDTH, int(round(ball_width * ROI_WIDTH_SCALE)))
     roi_height = max(ROI_MIN_HEIGHT, int(round(ball_height * ROI_HEIGHT_SCALE)))
     trigger_width = max(TRIGGER_MIN_WIDTH,
                         int(round(ball_width * TRIGGER_WIDTH_SCALE)))
     trigger_height = max(TRIGGER_MIN_HEIGHT,
                          int(round(ball_height * TRIGGER_HEIGHT_SCALE)))
-    roi = _clamp_rect(GRAB_CENTER_X - roi_width // 2,
+    roi = _clamp_rect(center_x - roi_width // 2,
                       center_y - roi_height // 2,
                       roi_width, roi_height)
-    trigger_zone = _clamp_rect(GRAB_CENTER_X - trigger_width // 2,
+    trigger_zone = _clamp_rect(center_x - trigger_width // 2,
                                center_y - trigger_height // 2,
                                trigger_width, trigger_height)
     return roi, trigger_zone
@@ -231,7 +232,7 @@ def build_calibrated_regions(center_y, ball_width, ball_height):
 
 def load_roi_config(path=None):
     """Load persisted regions without replacing valid runtime values on error."""
-    global ROI, TRIGGER_ZONE, GRAB_CENTER_X, GRAB_CENTER_Y
+    global ROI, TRIGGER_ZONE, GRAB_CENTER_Y, CALIBRATED_CENTER_X
     global BALL_WIDTH, BALL_HEIGHT
     if path is None:
         path = ROI_CONFIG_PATH
@@ -240,7 +241,8 @@ def load_roi_config(path=None):
             payload = json.load(config_file)
         loaded_roi = payload.get("roi")
         loaded_trigger = payload.get("trigger_zone")
-        loaded_center_x = int(payload.get("grab_center_x", GRAB_CENTER_X))
+        loaded_center_x = int(payload.get(
+            "calibrated_center_x", payload.get("grab_center_x", CALIBRATED_CENTER_X)))
         loaded_center_y = int(payload.get("grab_center_y", GRAB_CENTER_Y))
         loaded_width = int(payload.get("ball_width", BALL_WIDTH))
         loaded_height = int(payload.get("ball_height", BALL_HEIGHT))
@@ -258,7 +260,7 @@ def load_roi_config(path=None):
 
     ROI = [int(value) for value in loaded_roi]
     TRIGGER_ZONE = [int(value) for value in loaded_trigger]
-    GRAB_CENTER_X = loaded_center_x
+    CALIBRATED_CENTER_X = loaded_center_x
     GRAB_CENTER_Y = loaded_center_y
     BALL_WIDTH = loaded_width
     BALL_HEIGHT = loaded_height
@@ -273,7 +275,8 @@ def save_roi_config(path=None):
         "version": 1,
         "roi": ROI[:],
         "trigger_zone": TRIGGER_ZONE[:],
-        "grab_center_x": GRAB_CENTER_X,
+        "grab_center_x": CALIBRATED_CENTER_X,
+        "calibrated_center_x": CALIBRATED_CENTER_X,
         "grab_center_y": GRAB_CENTER_Y,
         "ball_width": BALL_WIDTH,
         "ball_height": BALL_HEIGHT,
@@ -291,7 +294,7 @@ def save_roi_config(path=None):
 def set_mode(mode, source):
     """Set mode; only a UART command represents a new grab task."""
     global current_mode, detected_latched, detected_streak, calibrating
-    global calibration_samples, calibration_inside_target
+    global calibration_samples
     if mode not in (MODE_RED, MODE_BLUE):
         return False
     current_mode = mode
@@ -300,7 +303,6 @@ def set_mode(mode, source):
         detected_latched = False
         calibrating = False
         calibration_samples = []
-        calibration_inside_target = False
     return True
 
 
@@ -434,13 +436,12 @@ def update_detection(blob, serial):
 def start_auto_roi():
     """Start a five-second trajectory calibration without reporting UART."""
     global calibrating, calibration_started_ms, calibration_samples
-    global calibration_inside_target, calibration_old_roi
+    global calibration_old_roi
     global calibration_old_trigger_zone, last_status_message
     calibration_old_roi = ROI[:]
     calibration_old_trigger_zone = TRIGGER_ZONE[:]
     calibration_started_ms = ticks_ms()
     calibration_samples = []
-    calibration_inside_target = False
     calibrating = True
     last_status_message = "CALIBRATING"
 
@@ -464,18 +465,21 @@ def detect_calibration_blob(img):
 
 def finish_auto_roi(success):
     """Commit a successful calibration or restore its pre-calibration state."""
-    global ROI, TRIGGER_ZONE, GRAB_CENTER_Y, BALL_WIDTH, BALL_HEIGHT
-    global calibrating, calibration_samples, calibration_inside_target
+    global ROI, TRIGGER_ZONE, GRAB_CENTER_Y, CALIBRATED_CENTER_X
+    global BALL_WIDTH, BALL_HEIGHT
+    global calibrating, calibration_samples
     global calibration_old_roi, calibration_old_trigger_zone
     global last_status_message
     if success and len(calibration_samples) >= CALIB_MIN_SAMPLES:
-        center_y = median_int([sample[0] for sample in calibration_samples])
-        ball_width = median_int([sample[1] for sample in calibration_samples])
-        ball_height = median_int([sample[2] for sample in calibration_samples])
+        center_x = median_int([sample[0] for sample in calibration_samples])
+        center_y = median_int([sample[1] for sample in calibration_samples])
+        ball_width = median_int([sample[2] for sample in calibration_samples])
+        ball_height = median_int([sample[3] for sample in calibration_samples])
         new_roi, new_trigger_zone = build_calibrated_regions(
-            center_y, ball_width, ball_height)
+            center_x, center_y, ball_width, ball_height)
         ROI = new_roi
         TRIGGER_ZONE = new_trigger_zone
+        CALIBRATED_CENTER_X = center_x
         GRAB_CENTER_Y = center_y
         BALL_WIDTH = ball_width
         BALL_HEIGHT = ball_height
@@ -491,14 +495,13 @@ def finish_auto_roi(success):
         last_status_message = "CALIBRATION FAILED"
     calibrating = False
     calibration_samples = []
-    calibration_inside_target = False
     calibration_old_roi = None
     calibration_old_trigger_zone = None
 
 
 def calibration_process(img, now_ms=None):
-    """Collect one sample per X-window crossing and finalize calibration."""
-    global calibration_inside_target, calibration_samples
+    """Collect one sample per consecutive valid frame and finalize calibration."""
+    global calibration_samples
     if not calibrating:
         return None
     if now_ms is None:
@@ -509,19 +512,19 @@ def calibration_process(img, now_ms=None):
 
     blob = detect_calibration_blob(img)
     if blob is None:
-        calibration_inside_target = False
+        calibration_samples = []
         return None
     x = _blob_value(blob, "x")
+    y = _blob_value(blob, "y")
     width = _blob_value(blob, "w")
+    height = _blob_value(blob, "h")
     center_x = x + width // 2
+    center_y = y + height // 2
     inside_target = abs(center_x - GRAB_CENTER_X) <= CALIB_X_TOLERANCE
-    if inside_target and not calibration_inside_target:
-        calibration_samples.append((
-            _blob_value(blob, "y") + _blob_value(blob, "h") // 2,
-            width,
-            _blob_value(blob, "h"),
-        ))
-    calibration_inside_target = inside_target
+    if not inside_target:
+        calibration_samples = []
+        return blob
+    calibration_samples.append((center_x, center_y, width, height))
     if len(calibration_samples) >= CALIB_MIN_SAMPLES:
         finish_auto_roi(True)
     return blob
@@ -649,28 +652,32 @@ def main():
     # The light is initialized and turned on before the camera starts.
     light_init()
     light_on()
-    serial = init_uart()
-    cam = init_camera()
-    disp = init_display()
-    touch = init_touchscreen()
-    load_roi_config()
+    try:
+        serial = init_uart()
+        cam = init_camera()
+        disp = init_display()
+        touch = init_touchscreen()
+        load_roi_config()
 
-    print("MaixCAM2 red/blue ball ROI recognizer started")
-    print("UART4 {} TX=A21 RX=A22".format(UART_DEVICE))
-    while True:
-        uart_process(serial)
-        image_frame = cam.read()
-        image_width = image_frame.width() if hasattr(image_frame, "width") else CAMERA_WIDTH
-        image_height = image_frame.height() if hasattr(image_frame, "height") else CAMERA_HEIGHT
-        touch_process(touch, image_width, image_height)
-        if calibrating:
-            blob = calibration_process(image_frame)
-        else:
-            blob = detect_ball(image_frame)
-            update_detection(blob, serial)
-        draw_ui(image_frame, blob)
-        disp.show(image_frame)
-        sleep_ms(MAIN_LOOP_SLEEP_MS)
+        print("MaixCAM2 red/blue ball ROI recognizer started")
+        print("UART4 {} TX=A21 RX=A22".format(UART_DEVICE))
+        while not app.need_exit():
+            uart_process(serial)
+            image_frame = cam.read()
+            image_width = image_frame.width() if hasattr(image_frame, "width") else CAMERA_WIDTH
+            image_height = image_frame.height() if hasattr(image_frame, "height") else CAMERA_HEIGHT
+            touch_process(touch, image_width, image_height)
+            if calibrating:
+                blob = calibration_process(image_frame)
+            else:
+                blob = detect_ball(image_frame)
+                update_detection(blob, serial)
+            draw_ui(image_frame, blob)
+            disp.show(image_frame)
+            sleep_ms(MAIN_LOOP_SLEEP_MS)
+    finally:
+        light_off()
+        print("program exit")
 
 
 class _FakeBlob:
@@ -730,7 +737,8 @@ class _FakeTouch:
 
 def _selftest():
     global ROI, TRIGGER_ZONE, ROI_CONFIG_PATH, GRAB_CENTER_X
-    global GRAB_CENTER_Y, BALL_WIDTH, BALL_HEIGHT, detected_latched
+    global CALIBRATED_CENTER_X, GRAB_CENTER_Y, BALL_WIDTH, BALL_HEIGHT
+    global detected_latched
     global calibrating, last_touch_ms
     process_command_bytes(b"1\r\n")
     assert current_mode == 1
@@ -749,9 +757,10 @@ def _selftest():
     assert is_blob_in_trigger_zone(valid) is True
     assert median_int([190, 220, 203]) == 203
     assert median_int([190, 203, 220, 214]) == 208
-    calibrated_roi, calibrated_trigger = build_calibrated_regions(222, 50, 50)
-    assert point_in_rect(320, 222, calibrated_roi)
-    assert point_in_rect(320, 222, calibrated_trigger)
+    calibrated_roi, calibrated_trigger = build_calibrated_regions(350, 222, 50, 50)
+    assert point_in_rect(350, 222, calibrated_roi)
+    assert point_in_rect(350, 222, calibrated_trigger)
+    assert not point_in_rect(315, 222, calibrated_trigger)
     fake_image = _FakeImage([valid])
     assert detect_ball(fake_image, MODE_RED) is valid
     assert fake_image.kwargs["roi"] == ROI
@@ -784,11 +793,12 @@ def _selftest():
     import os
     import tempfile
     saved_state = (ROI[:], TRIGGER_ZONE[:], ROI_CONFIG_PATH,
-                   GRAB_CENTER_X, GRAB_CENTER_Y, BALL_WIDTH, BALL_HEIGHT)
+                   GRAB_CENTER_X, CALIBRATED_CENTER_X, GRAB_CENTER_Y,
+                   BALL_WIDTH, BALL_HEIGHT)
     with tempfile.TemporaryDirectory() as temp_dir:
         config_path = os.path.join(temp_dir, "roi.json")
         ROI_CONFIG_PATH = config_path
-        calibrated_roi, calibrated_trigger = build_calibrated_regions(222, 50, 50)
+        calibrated_roi, calibrated_trigger = build_calibrated_regions(350, 222, 50, 50)
         ROI = calibrated_roi[:]
         TRIGGER_ZONE = calibrated_trigger[:]
         GRAB_CENTER_Y = 222
@@ -808,17 +818,22 @@ def _selftest():
         assert detected_latched is True
         finish_auto_roi(False)
 
-        inside = _FakeBlob(295, 195, 50, 50, 1800)
-        outside = _FakeBlob(200, 195, 50, 50, 1800)
+        inside = _FakeBlob(325, 235, 50, 50, 1800)
+        uart_count_before_calibration = len(serial.sent)
         start_auto_roi()
-        for index in range(CALIB_MIN_SAMPLES):
+        for _ in range(CALIB_MIN_SAMPLES):
             calibration_process(_FakeImage([inside]), calibration_started_ms + 100)
-            if index < CALIB_MIN_SAMPLES - 1:
-                calibration_process(_FakeImage([outside]), calibration_started_ms + 200)
         assert calibrating is False
+        assert len(serial.sent) == uart_count_before_calibration
         assert os.path.exists(config_path)
+        assert CALIBRATED_CENTER_X == 350
+        assert last_status_message == "ROI SAVED"
         saved_roi = ROI[:]
         saved_trigger = TRIGGER_ZONE[:]
+        assert point_in_rect(350, 260, saved_roi)
+        assert point_in_rect(350, 260, saved_trigger)
+        assert saved_roi != DEFAULT_ROI
+        assert saved_trigger != DEFAULT_TRIGGER_ZONE
 
         start_auto_roi()
         calibration_process(_FakeImage([]), calibration_started_ms + CALIB_DURATION_MS)
@@ -830,15 +845,24 @@ def _selftest():
     TRIGGER_ZONE = saved_state[1]
     ROI_CONFIG_PATH = saved_state[2]
     GRAB_CENTER_X = saved_state[3]
-    GRAB_CENTER_Y = saved_state[4]
-    BALL_WIDTH = saved_state[5]
-    BALL_HEIGHT = saved_state[6]
+    CALIBRATED_CENTER_X = saved_state[4]
+    GRAB_CENTER_Y = saved_state[5]
+    BALL_WIDTH = saved_state[6]
+    BALL_HEIGHT = saved_state[7]
     detected_latched = False
     calibrating = False
+    with open(__file__, "r") as source_file:
+        source = source_file.read()
+    assert "while not app.need_exit()" in source
+    assert "finally:" in source
+    assert "light_off()" in source
     print("red-blue ball selftest passed")
 
 
 if __name__ == "__main__":
     import sys
+
     if "--selftest" in sys.argv:
         _selftest()
+    else:
+        main()
