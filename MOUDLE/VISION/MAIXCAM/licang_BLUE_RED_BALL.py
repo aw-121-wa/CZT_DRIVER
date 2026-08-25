@@ -3,7 +3,7 @@
 The script intentionally uses a small ASCII protocol:
 
 * STM32 -> MaixCAM2: ``1`` selects red, ``2`` selects blue.
-* MaixCAM2 -> STM32: ``1\\n`` reports one confirmed target.
+* MaixCAM2 -> STM32: ``1\\n`` reports one valid target.
 
 Thresholds and geometry values near the top of this file are field-calibration
 parameters and should be tuned with the B25 illumination LED enabled.
@@ -35,7 +35,7 @@ SCREEN_WIDTH = 640
 SCREEN_HEIGHT = 480
 
 # MaixCAM2 official UART4: TX=A21, RX=A22, device=/dev/ttyS4.
-UART_DEVICE = "/dev/ttyS4"
+UART_DEVICE = "/dev/ttyS2"
 UART_BAUDRATE = 115200
 UART_READ_CHUNK = 64
 
@@ -85,8 +85,6 @@ MAX_HEIGHT = 260
 RATIO_MIN = 0.65
 RATIO_MAX = 1.35
 
-DETECT_CONFIRM_FRAMES = 3
-
 BUTTON_RED = [10, 405, 200, 60]
 BUTTON_BLUE = [220, 405, 200, 60]
 BUTTON_AUTO_ROI = [430, 405, 200, 60]
@@ -97,7 +95,9 @@ MAIN_LOOP_SLEEP_MS = 1
 # ========================== Runtime State ==========================
 
 current_mode = MODE_RED
+display_mode = MODE_RED
 detected_latched = False
+recognition_armed = False
 detected_streak = 0
 last_touch_ms = 0
 illumination_gpio = None
@@ -292,17 +292,28 @@ def save_roi_config(path=None):
 # ========================== Mode and UART Protocol ==========================
 
 def set_mode(mode, source):
-    """Set mode; only a UART command represents a new grab task."""
-    global current_mode, detected_latched, detected_streak, calibrating
-    global calibration_samples
+    """Set task mode from UART or debug display mode from touch."""
+    global current_mode, display_mode, detected_latched
+    global recognition_armed, detected_streak, calibrating
+    global calibration_samples, last_status_message
     if mode not in (MODE_RED, MODE_BLUE):
         return False
-    current_mode = mode
-    detected_streak = 0
     if source == "uart":
+        current_mode = mode
+        display_mode = mode
         detected_latched = False
+        recognition_armed = True
+        detected_streak = 0
         calibrating = False
         calibration_samples = []
+        last_status_message = ""
+        return True
+    if source == "touch":
+        display_mode = mode
+        return True
+    current_mode = mode
+    display_mode = mode
+    detected_streak = 0
     return True
 
 
@@ -413,24 +424,26 @@ def detect_ball(img, mode=None):
 
 
 def update_detection(blob, serial):
-    """Report one target per UART task after trigger-zone confirmation."""
-    global detected_latched, detected_streak
-    if detected_latched:
+    """Report one valid ROI target for the currently armed UART task."""
+    global detected_latched, recognition_armed, detected_streak
+    global last_status_message, calibrating
+    if calibrating or not recognition_armed or detected_latched:
         return
     valid_blob = filter_blob(blob)
-    if valid_blob is None or not is_blob_in_trigger_zone(valid_blob):
+    if valid_blob is None:
         detected_streak = 0
         return
 
-    detected_streak += 1
-    if detected_streak < DETECT_CONFIRM_FRAMES:
+    if serial is None:
         return
-    if serial is not None:
-        try:
-            serial.write(b"1\n")
-        except Exception:
-            pass
+    try:
+        serial.write(b"1\n")
+    except Exception:
+        return
     detected_latched = True
+    recognition_armed = False
+    detected_streak = 0
+    last_status_message = "DONE"
 
 
 def start_auto_roi():
@@ -545,7 +558,7 @@ def screen_to_image_point(x, y, image_width, image_height):
 
 
 def touch_process(touch, image_width=CAMERA_WIDTH, image_height=CAMERA_HEIGHT):
-    """Poll one touch event and let the last input source select the mode."""
+    """Poll touch input for debug display selection or AUTO ROI."""
     global last_touch_ms
     if touch is None:
         return
@@ -610,14 +623,14 @@ def draw_ui(img, blob):
             img.draw_rect(x, y, width, height, green)
             if hasattr(img, "draw_circle"):
                 img.draw_circle(center_x, center_y, 5, red)
-        mode_name = COLOR_NAMES[current_mode]
+        mode_name = COLOR_NAMES[display_mode]
         if calibrating:
             status = "CALIBRATING {}/{}".format(
                 len(calibration_samples), CALIB_MIN_SAMPLES)
-        elif detected_latched:
-            status = "LOCKED"
-        else:
+        elif recognition_armed:
             status = "SEARCHING"
+        else:
+            status = "WAIT CMD"
         _draw_text(img, 10, 10, "MODE: {}".format(mode_name), white)
         _draw_text(img, 10, 35, "STATUS: {}".format(status), white)
         if last_status_message and not calibrating:
@@ -627,9 +640,9 @@ def draw_ui(img, blob):
             (MODE_RED, BUTTON_RED, "RED", red),
             (MODE_BLUE, BUTTON_BLUE, "BLUE", blue),
         ):
-            outline = color if current_mode == mode else white
+            outline = color if display_mode == mode else white
             img.draw_rect(rect[0], rect[1], rect[2], rect[3], outline)
-            marker = "[X]" if current_mode == mode else "[ ]"
+            marker = "[X]" if display_mode == mode else "[ ]"
             _draw_text(img, rect[0] + 20, rect[1] + 12,
                        "{} {}".format(marker, label), outline)
         auto_outline = yellow if calibrating else white
@@ -669,9 +682,11 @@ def main():
             touch_process(touch, image_width, image_height)
             if calibrating:
                 blob = calibration_process(image_frame)
-            else:
+            elif recognition_armed:
                 blob = detect_ball(image_frame)
                 update_detection(blob, serial)
+            else:
+                blob = None
             draw_ui(image_frame, blob)
             disp.show(image_frame)
             sleep_ms(MAIN_LOOP_SLEEP_MS)
@@ -727,6 +742,19 @@ class _FakeImage:
         return self.blobs
 
 
+class _ColorFakeImage(_FakeImage):
+    def __init__(self, blob, visible_threshold):
+        super().__init__([blob])
+        self.visible_threshold = visible_threshold
+
+    def find_blobs(self, thresholds, **kwargs):
+        self.thresholds = thresholds
+        self.kwargs = kwargs
+        if thresholds == [self.visible_threshold]:
+            return self.blobs
+        return []
+
+
 class _FakeTouch:
     def __init__(self, point):
         self.point = point
@@ -738,15 +766,8 @@ class _FakeTouch:
 def _selftest():
     global ROI, TRIGGER_ZONE, ROI_CONFIG_PATH, GRAB_CENTER_X
     global CALIBRATED_CENTER_X, GRAB_CENTER_Y, BALL_WIDTH, BALL_HEIGHT
-    global detected_latched
+    global current_mode, display_mode, detected_latched, recognition_armed
     global calibrating, last_touch_ms
-    process_command_bytes(b"1\r\n")
-    assert current_mode == 1
-    process_command_bytes(b"2\r\n")
-    assert current_mode == 2
-    process_command_bytes(b"x\r\n")
-    assert current_mode == 2
-
     valid = _FakeBlob(295, 195, 50, 50, 1800)
     outside_trigger = _FakeBlob(245, 195, 50, 50, 1800)
     smaller = _FakeBlob(305, 205, 30, 30, 900)
@@ -771,24 +792,55 @@ def _selftest():
     assert calibration_image.kwargs["roi"] == CALIB_SEARCH_ROI
 
     serial = _FakeSerial()
-    set_mode(1, "test")
-    for _ in range(3):
-        update_detection(valid, serial)
+    assert recognition_armed is False
+    idle_blue_image = _ColorFakeImage(valid, BLUE_THRESHOLD)
+    idle_blob = detect_ball(idle_blue_image, MODE_BLUE)
+    assert idle_blob is valid
+    update_detection(idle_blob, serial)
+    assert serial.sent == []
+
+    process_command_bytes(b"2\r\n")
+    assert current_mode == MODE_BLUE
+    assert recognition_armed is True
+    blue_image = _ColorFakeImage(valid, BLUE_THRESHOLD)
+    assert detect_ball(blue_image) is valid
+    assert blue_image.thresholds == [BLUE_THRESHOLD]
+    update_detection(valid, serial)
     assert serial.sent == [b"1\n"]
-    for _ in range(3):
+
+    assert recognition_armed is False
+    assert detected_latched is True
+    for _ in range(100):
         update_detection(valid, serial)
     assert serial.sent == [b"1\n"]
 
-    for _ in range(5):
-        update_detection(None, serial)
-    for _ in range(3):
-        update_detection(valid, serial)
-    assert serial.sent == [b"1\n"]
+    process_command_bytes(b"2")
+    assert recognition_armed is True
+    next_blue_image = _ColorFakeImage(valid, BLUE_THRESHOLD)
+    next_blob = detect_ball(next_blue_image)
+    assert next_blob is valid
+    update_detection(next_blob, serial)
+    assert serial.sent == [b"1\n", b"1\n"]
 
     process_command_bytes(b"1")
-    for _ in range(3):
-        update_detection(valid, serial)
-    assert serial.sent == [b"1\n", b"1\n"]
+    assert current_mode == MODE_RED
+    assert recognition_armed is True
+    wrong_blue_image = _ColorFakeImage(valid, BLUE_THRESHOLD)
+    assert detect_ball(wrong_blue_image) is None
+    assert wrong_blue_image.thresholds == [RED_THRESHOLD]
+    red_image = _ColorFakeImage(valid, RED_THRESHOLD)
+    assert detect_ball(red_image) is valid
+    assert red_image.thresholds == [RED_THRESHOLD]
+    update_detection(valid, serial)
+    assert serial.sent == [b"1\n", b"1\n", b"1\n"]
+
+    task_mode_before_touch = current_mode
+    recognition_armed = False
+    last_touch_ms = 0
+    touch_process(_FakeTouch((230, 430, 1)))
+    assert display_mode == MODE_BLUE
+    assert current_mode == task_mode_before_touch
+    assert recognition_armed is False
 
     import os
     import tempfile
@@ -816,6 +868,7 @@ def _selftest():
         touch_process(_FakeTouch((500, 430, 1)))
         assert calibrating is True
         assert detected_latched is True
+        assert recognition_armed is False
         finish_auto_roi(False)
 
         inside = _FakeBlob(325, 235, 50, 50, 1800)
@@ -849,11 +902,16 @@ def _selftest():
     GRAB_CENTER_Y = saved_state[5]
     BALL_WIDTH = saved_state[6]
     BALL_HEIGHT = saved_state[7]
+    current_mode = MODE_RED
+    display_mode = MODE_RED
     detected_latched = False
+    recognition_armed = False
     calibrating = False
     with open(__file__, "r") as source_file:
         source = source_file.read()
     assert "while not app.need_exit()" in source
+    assert "elif recognition_armed:" in source
+    assert 'status = "WAIT CMD"' in source
     assert "finally:" in source
     assert "light_off()" in source
     print("red-blue ball selftest passed")
