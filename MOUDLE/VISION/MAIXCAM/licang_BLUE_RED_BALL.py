@@ -150,13 +150,14 @@ def light_off():
         return
     illumination_gpio.value(0)
 
-
 def init_uart():
-    """Initialize official MaixCAM2 UART4 on A21/A22."""
+    """Initialize MaixCAM2 UART2 on B0/B1."""
     if not MAIXPY:
         raise RuntimeError("MaixPy modules are not available")
-    pinmap.set_pin_function("A21", "UART4_TX")
-    pinmap.set_pin_function("A22", "UART4_RX")
+
+    pinmap.set_pin_function("B0", "UART2_TX")
+    pinmap.set_pin_function("B1", "UART2_RX")
+
     return uart.UART(UART_DEVICE, UART_BAUDRATE)
 
 
